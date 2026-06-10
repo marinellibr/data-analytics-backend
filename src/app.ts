@@ -39,12 +39,13 @@ app.get('/hello-world', (req, res) => {
 
 const MAX_STRING_LENGTH = 500;
 const MAX_RECORDS_PER_COLLECTION = Number(process.env.MAX_RECORDS_PER_FILE) || 10_000;
-const DATE_TIME_PATTERN = /^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2} (AM|PM)$/;
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 interface FieldSpec {
-  type: 'string' | 'number';
+  type: 'string' | 'number' | 'object';
   enum?: readonly string[];
   pattern?: RegExp;
+  fields?: Record<string, FieldSpec>;
 }
 
 interface EntryRoute {
@@ -55,25 +56,16 @@ interface EntryRoute {
 
 const ENTRY_ROUTES: EntryRoute[] = [
   {
-    path: '/click-events',
-    collection: 'click-events',
+    path: '/events',
+    collection: 'events',
     fields: {
       appID: { type: 'string' },
       sessionID: { type: 'string' },
-      where: { type: 'string' },
-      target: { type: 'string' },
-      dateTime: { type: 'string', pattern: DATE_TIME_PATTERN },
-    },
-  },
-  {
-    path: '/page-load-events',
-    collection: 'page-load-events',
-    fields: {
-      appID: { type: 'string' },
-      sessionID: { type: 'string' },
-      where: { type: 'string' },
-      timeOnPage: { type: 'number' },
-      dateTime: { type: 'string', pattern: DATE_TIME_PATTERN },
+      type: { type: 'string', enum: ['click', 'pageview'] },
+      location: { type: 'string' },
+      element: { type: 'string' }, // optional for click events
+      timeOnPage: { type: 'number' }, // optional for pageview events
+      timestamp: { type: 'string', pattern: ISO_DATE_PATTERN },
     },
   },
   {
@@ -84,9 +76,9 @@ const ENTRY_ROUTES: EntryRoute[] = [
       sessionID: { type: 'string' },
       endpoint: { type: 'string' },
       method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] },
-      httpStatus: { type: 'number' },
+      status: { type: 'number' },
       duration: { type: 'number' },
-      dateTime: { type: 'string', pattern: DATE_TIME_PATTERN },
+      timestamp: { type: 'string', pattern: ISO_DATE_PATTERN },
     },
   },
   {
@@ -95,10 +87,17 @@ const ENTRY_ROUTES: EntryRoute[] = [
     fields: {
       appID: { type: 'string' },
       sessionID: { type: 'string' },
-      device: { type: 'string', enum: ['desktop', 'mobile', 'tablet'] },
-      browser: { type: 'string' },
-      referrer: { type: 'string' },
-      startedAt: { type: 'string', pattern: DATE_TIME_PATTERN },
+      userID: { type: 'string' }, // optional
+      context: {
+        type: 'object',
+        fields: {
+          device: { type: 'string', enum: ['desktop', 'mobile', 'tablet'] },
+          browser: { type: 'string' },
+          referrer: { type: 'string' },
+        },
+      },
+      startTime: { type: 'string', pattern: ISO_DATE_PATTERN },
+      endTime: { type: 'string', pattern: ISO_DATE_PATTERN }, // optional
     },
   },
 ];
@@ -109,44 +108,68 @@ const ENTRY_ROUTES: EntryRoute[] = [
 // from ever reaching the database driver.
 const validateAndPick = (
   body: Record<string, unknown>,
-  fields: Record<string, FieldSpec>
+  fields: Record<string, FieldSpec>,
+  prefix = ''
 ): { errors: string[]; record: Record<string, unknown> } => {
   const errors: string[] = [];
   const record: Record<string, unknown> = {};
 
+  const optionalFields = ['element', 'timeOnPage', 'userID', 'endTime'];
+
   for (const [name, spec] of Object.entries(fields)) {
     const value = body[name];
+    const fieldPath = prefix ? `${prefix}.${name}` : name;
+    const isOptional = optionalFields.includes(name);
+
+    if ((value === undefined || value === null) && !isOptional) {
+      errors.push(`${fieldPath} is required`);
+      continue;
+    }
 
     if (value === undefined || value === null) {
-      errors.push(`${name} is required`);
-      continue;
+      continue; // Skip optional fields
     }
 
     if (spec.type === 'string') {
       if (typeof value !== 'string') {
-        errors.push(`${name} must be a string`);
+        errors.push(`${fieldPath} must be a string`);
         continue;
       }
       if (value.length > MAX_STRING_LENGTH) {
-        errors.push(`${name} must be at most ${MAX_STRING_LENGTH} characters`);
+        errors.push(`${fieldPath} must be at most ${MAX_STRING_LENGTH} characters`);
         continue;
       }
       if (spec.enum && !spec.enum.includes(value)) {
-        errors.push(`${name} must be one of: ${spec.enum.join(', ')}`);
+        errors.push(`${fieldPath} must be one of: ${spec.enum.join(', ')}`);
         continue;
       }
       if (spec.pattern && !spec.pattern.test(value)) {
-        errors.push(`${name} must match format dd/MM/yyyy hh:mm AM/PM`);
+        errors.push(`${fieldPath} must be ISO 8601 format (YYYY-MM-DDTHH:mm:ss.sssZ)`);
         continue;
       }
-    } else {
+      record[name] = value;
+    } else if (spec.type === 'number') {
       if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-        errors.push(`${name} must be a non-negative number`);
+        errors.push(`${fieldPath} must be a non-negative number`);
         continue;
       }
+      record[name] = value;
+    } else if (spec.type === 'object' && spec.fields) {
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        errors.push(`${fieldPath} must be an object`);
+        continue;
+      }
+      const { errors: nestedErrors, record: nestedRecord } = validateAndPick(
+        value as Record<string, unknown>,
+        spec.fields,
+        fieldPath
+      );
+      if (nestedErrors.length > 0) {
+        errors.push(...nestedErrors);
+        continue;
+      }
+      record[name] = nestedRecord;
     }
-
-    record[name] = value;
   }
 
   return { errors, record };
