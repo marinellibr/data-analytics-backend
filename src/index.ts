@@ -1,6 +1,7 @@
 import express from 'express';
 import rateLimit from 'express-rate-limit';
-import { appendRecord, readRecords, StorageLimitError } from './storage';
+import { JsonRepository, Repository, StorageLimitError } from './storage';
+import { MongoRepository } from './mongo';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -49,14 +50,14 @@ interface FieldSpec {
 
 interface EntryRoute {
   path: string;
-  fileName: string;
+  collection: string;
   fields: Record<string, FieldSpec>;
 }
 
 const ENTRY_ROUTES: EntryRoute[] = [
   {
     path: '/click-events',
-    fileName: 'click-events.json',
+    collection: 'click-events',
     fields: {
       appID: { type: 'string' },
       sessionID: { type: 'string' },
@@ -67,7 +68,7 @@ const ENTRY_ROUTES: EntryRoute[] = [
   },
   {
     path: '/page-load-events',
-    fileName: 'page-load-events.json',
+    collection: 'page-load-events',
     fields: {
       appID: { type: 'string' },
       sessionID: { type: 'string' },
@@ -78,7 +79,7 @@ const ENTRY_ROUTES: EntryRoute[] = [
   },
   {
     path: '/http-calls',
-    fileName: 'http-calls.json',
+    collection: 'http-calls',
     fields: {
       appID: { type: 'string' },
       sessionID: { type: 'string' },
@@ -91,7 +92,7 @@ const ENTRY_ROUTES: EntryRoute[] = [
   },
   {
     path: '/sessions',
-    fileName: 'sessions.json',
+    collection: 'sessions',
     fields: {
       appID: { type: 'string' },
       sessionID: { type: 'string' },
@@ -150,7 +151,9 @@ const validateAndPick = (
   return { errors, record };
 };
 
-for (const { path, fileName, fields } of ENTRY_ROUTES) {
+let repository: Repository;
+
+for (const { path, collection, fields } of ENTRY_ROUTES) {
   app.post(path, async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const { errors, record } = validateAndPick(body, fields);
@@ -161,28 +164,60 @@ for (const { path, fileName, fields } of ENTRY_ROUTES) {
     }
 
     try {
-      await appendRecord(fileName, record, MAX_RECORDS_PER_FILE);
+      await repository.append(collection, record, MAX_RECORDS_PER_FILE);
       res.status(201).json({ success: true, data: record });
     } catch (err) {
       if (err instanceof StorageLimitError) {
         res.status(507).json({ message: 'Storage limit reached for this event type' });
         return;
       }
-      console.error(`Failed to persist record to ${fileName}:`, err);
+      console.error(`Failed to persist record to ${collection}:`, err);
       res.status(500).json({ message: 'Failed to persist record' });
     }
   });
 
   app.get(path, async (req, res) => {
     try {
-      res.json(await readRecords(fileName));
+      res.json(await repository.list(collection));
     } catch (err) {
-      console.error(`Failed to read records from ${fileName}:`, err);
+      console.error(`Failed to read records from ${collection}:`, err);
       res.status(500).json({ message: 'Failed to read records' });
     }
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+const createRepository = async (): Promise<Repository> => {
+  const uri = process.env.MONGODB_URI;
+  if (uri) {
+    const dbName = process.env.MONGODB_DB || 'analytics';
+    const repo = await MongoRepository.connect(uri, dbName);
+    console.log(`Using MongoDB storage (database: ${dbName})`);
+    return repo;
+  }
+  console.log('MONGODB_URI not set — using JSON file storage (development mode)');
+  return new JsonRepository();
+};
+
+const start = async (): Promise<void> => {
+  repository = await createRepository();
+
+  const server = app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+
+  const shutdown = async (signal: string) => {
+    console.log(`${signal} received, shutting down`);
+    server.close(async () => {
+      await repository.close();
+      process.exit(0);
+    });
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+};
+
+start().catch((err) => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
 });

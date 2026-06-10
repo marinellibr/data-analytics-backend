@@ -3,21 +3,27 @@ import path from 'path';
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 
-// Serializes writes per file so concurrent requests don't lose records
-const writeQueues = new Map<string, Promise<unknown>>();
-
-const filePath = (fileName: string): string => path.join(DATA_DIR, fileName);
-
 export class StorageLimitError extends Error {
-  constructor(fileName: string, maxRecords: number) {
-    super(`Storage limit of ${maxRecords} records reached for ${fileName}`);
+  constructor(collection: string, maxRecords: number) {
+    super(`Storage limit of ${maxRecords} records reached for ${collection}`);
     this.name = 'StorageLimitError';
   }
 }
 
-export const readRecords = async (fileName: string): Promise<unknown[]> => {
+// A storage backend for analytics records. Both the JSON (local dev) and
+// MongoDB (production) implementations satisfy this contract, so the routes
+// don't care which one is wired in.
+export interface Repository {
+  append(collection: string, record: Record<string, unknown>, maxRecords?: number): Promise<void>;
+  list(collection: string): Promise<unknown[]>;
+  close(): Promise<void>;
+}
+
+const filePath = (collection: string): string => path.join(DATA_DIR, `${collection}.json`);
+
+const readFile = async (collection: string): Promise<unknown[]> => {
   try {
-    const content = await fs.readFile(filePath(fileName), 'utf-8');
+    const content = await fs.readFile(filePath(collection), 'utf-8');
     return JSON.parse(content);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -27,26 +33,39 @@ export const readRecords = async (fileName: string): Promise<unknown[]> => {
   }
 };
 
-export const appendRecord = async <T>(fileName: string, record: T, maxRecords = Infinity): Promise<T> => {
-  const previous = writeQueues.get(fileName) ?? Promise.resolve();
+// File-backed repository for local development. Writes are serialized per
+// collection so concurrent requests don't clobber each other's records.
+export class JsonRepository implements Repository {
+  private writeQueues = new Map<string, Promise<unknown>>();
 
-  const task = previous.then(async () => {
-    await fs.mkdir(DATA_DIR, { recursive: true });
-    const records = await readRecords(fileName);
+  async list(collection: string): Promise<unknown[]> {
+    return readFile(collection);
+  }
 
-    if (records.length >= maxRecords) {
-      throw new StorageLimitError(fileName, maxRecords);
-    }
+  async append(collection: string, record: Record<string, unknown>, maxRecords = Infinity): Promise<void> {
+    const previous = this.writeQueues.get(collection) ?? Promise.resolve();
 
-    records.push(record);
-    await fs.writeFile(filePath(fileName), JSON.stringify(records, null, 2));
-    return record;
-  });
+    const task = previous.then(async () => {
+      await fs.mkdir(DATA_DIR, { recursive: true });
+      const records = await readFile(collection);
 
-  writeQueues.set(
-    fileName,
-    task.catch(() => undefined)
-  );
+      if (records.length >= maxRecords) {
+        throw new StorageLimitError(collection, maxRecords);
+      }
 
-  return task;
-};
+      records.push(record);
+      await fs.writeFile(filePath(collection), JSON.stringify(records, null, 2));
+    });
+
+    this.writeQueues.set(
+      collection,
+      task.catch(() => undefined)
+    );
+
+    await task;
+  }
+
+  async close(): Promise<void> {
+    // Nothing to clean up for the file backend
+  }
+}
