@@ -8,21 +8,118 @@ Todas as rotas de ingestão aceitam `POST` (gravar) e `GET` (listar):
 
 | Rota | Descrição | Campos obrigatórios |
 |------|-----------|---------------------|
-| `/click-events` | Cliques | `appID, sessionID, where, target, dateTime` |
-| `/page-load-events` | Carregamentos de página | `appID, sessionID, where, timeOnPage, dateTime` |
-| `/http-calls` | Chamadas HTTP | `appID, sessionID, endpoint, method, httpStatus, duration, dateTime` |
-| `/sessions` | Sessões | `appID, sessionID, device, browser, referrer, startedAt` |
+| `/events` | Cliques e Page Views | `appID, sessionID, type, location, timestamp` |
+| `/http-calls` | Chamadas HTTP | `appID, sessionID, endpoint, method, status, duration, timestamp` |
+| `/sessions` | Sessões | `appID, sessionID, context.device, context.browser, context.referrer, startTime` |
+
+**Variações:**
+- `/events` com `type: 'click'` → requer `element` (opcional)
+- `/events` com `type: 'pageview'` → requer `timeOnPage` (em ms)
 
 `GET /hello-world` é um health check simples.
 
-**Respostas:** `201` ao gravar, `400` em validação inválida, `429` ao exceder o rate limit, `507` quando a coleção atinge o limite de registros, `500` em erro interno.
+**Respostas:**
+- `201` — Evento gravado com sucesso
+- `400` — Validação inválida (campos ausentes/incorretos)
+- `429` — Rate limit excedido (60 req/min por IP)
+- `507` — Limite de registros atingido para a coleção
+- `500` — Erro interno do servidor
+
+## 📝 Exemplos de Uso
+
+### POST `/events` - Rastrear Clique
+
+```bash
+curl -X POST http://localhost:3000/events \
+  -H "Content-Type: application/json" \
+  -d '{
+    "appID": "ecommerce-pro",
+    "sessionID": "sess-abc123",
+    "type": "click",
+    "location": "/products/shoes",
+    "element": "button.add-to-cart",
+    "timestamp": "2026-06-10T14:32:45.123Z"
+  }'
+```
+
+**Resposta (201):**
+```json
+{
+  "success": true,
+  "data": {
+    "appID": "ecommerce-pro",
+    "sessionID": "sess-abc123",
+    "type": "click",
+    "location": "/products/shoes",
+    "element": "button.add-to-cart",
+    "timestamp": "2026-06-10T14:32:45.123Z"
+  }
+}
+```
+
+### POST `/events` - Rastrear Page View
+
+```bash
+curl -X POST http://localhost:3000/events \
+  -H "Content-Type: application/json" \
+  -d '{
+    "appID": "ecommerce-pro",
+    "sessionID": "sess-abc123",
+    "type": "pageview",
+    "location": "/checkout",
+    "timeOnPage": 12500,
+    "timestamp": "2026-06-10T14:33:12.456Z"
+  }'
+```
+
+### POST `/http-calls` - Rastrear Chamada HTTP
+
+```bash
+curl -X POST http://localhost:3000/http-calls \
+  -H "Content-Type: application/json" \
+  -d '{
+    "appID": "ecommerce-pro",
+    "sessionID": "sess-abc123",
+    "endpoint": "/api/orders",
+    "method": "POST",
+    "status": 201,
+    "duration": 567,
+    "timestamp": "2026-06-10T14:33:20.000Z"
+  }'
+```
+
+### POST `/sessions` - Inicializar Sessão
+
+```bash
+curl -X POST http://localhost:3000/sessions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "appID": "ecommerce-pro",
+    "sessionID": "sess-abc123",
+    "userID": "user-123",
+    "context": {
+      "device": "desktop",
+      "browser": "Chrome 126.0",
+      "referrer": "google.com"
+    },
+    "startTime": "2026-06-10T14:00:00.000Z"
+  }'
+```
+
+### GET - Listar Eventos
+
+```bash
+curl http://localhost:3000/events
+```
+
+Retorna array de todos os eventos gravados.
 
 ## 🔒 Segurança
 
 - **Rate limiting** por IP (`RATE_LIMIT_PER_MINUTE`, default 60/min)
-- **Body limitado a 10kb**
+- **Body limitado a 10kb** para prevenir DoS
 - **Validação estrita com whitelist de campos**: apenas os campos esperados são gravados — qualquer campo extra (incluindo operadores como `$gt`/`$ne`) é descartado, o que neutraliza tentativas de injeção NoSQL
-- **Tipos, enums e formato** validados (ex.: `method`, `device`, formato de data)
+- **Tipos, enums e formato** validados (ex.: `method`, `device`, timestamps em ISO 8601)
 - **Teto de registros por coleção** (`MAX_RECORDS_PER_FILE`) para evitar exaustão de armazenamento
 
 ## ⚙️ Configuração
