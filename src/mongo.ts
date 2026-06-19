@@ -34,6 +34,19 @@ export class MongoRepository implements Repository {
       .toArray();
   }
 
+  async distinctAppIDs(collections: string[]): Promise<string[]> {
+    const arrays = await Promise.all(
+      collections.map((c) => this.db.collection(c).distinct('appID'))
+    );
+    const ids = new Set<string>();
+    for (const arr of arrays) {
+      for (const id of arr) {
+        if (typeof id === 'string') ids.add(id);
+      }
+    }
+    return [...ids].sort();
+  }
+
   async append(collection: string, record: Record<string, unknown>, maxRecords = Infinity): Promise<void> {
     if (maxRecords !== Infinity) {
       const count = await this.db.collection(collection).estimatedDocumentCount();

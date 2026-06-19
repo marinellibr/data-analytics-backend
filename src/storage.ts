@@ -17,6 +17,7 @@ export interface Repository {
   append(collection: string, record: Record<string, unknown>, maxRecords?: number): Promise<void>;
   list(collection: string): Promise<unknown[]>;
   listByAppID(collection: string, appID: string): Promise<unknown[]>;
+  distinctAppIDs(collections: string[]): Promise<string[]>;
   close(): Promise<void>;
 }
 
@@ -46,6 +47,18 @@ export class JsonRepository implements Repository {
   async listByAppID(collection: string, appID: string): Promise<unknown[]> {
     const records = await readFile(collection);
     return records.filter((r) => (r as { appID?: unknown }).appID === appID);
+  }
+
+  async distinctAppIDs(collections: string[]): Promise<string[]> {
+    const ids = new Set<string>();
+    for (const collection of collections) {
+      const records = await readFile(collection);
+      for (const r of records) {
+        const id = (r as { appID?: unknown }).appID;
+        if (typeof id === 'string') ids.add(id);
+      }
+    }
+    return [...ids].sort();
   }
 
   async append(collection: string, record: Record<string, unknown>, maxRecords = Infinity): Promise<void> {
