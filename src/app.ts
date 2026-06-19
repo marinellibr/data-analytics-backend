@@ -209,3 +209,28 @@ for (const { path, collection, fields } of ENTRY_ROUTES) {
     }
   });
 }
+
+// Aggregated read: returns every event, http-call and session for a single
+// app in one response, so a client doesn't have to fetch each collection and
+// filter on its own.
+app.get('/apps/:appID', async (req, res) => {
+  const { appID } = req.params;
+
+  if (!appID || appID.length > MAX_STRING_LENGTH) {
+    res.status(400).json({ message: 'Invalid appID' });
+    return;
+  }
+
+  try {
+    const repository = await getRepository();
+    const [events, httpCalls, sessions] = await Promise.all([
+      repository.listByAppID('events', appID),
+      repository.listByAppID('http-calls', appID),
+      repository.listByAppID('sessions', appID),
+    ]);
+    res.json({ appID, events, httpCalls, sessions });
+  } catch (err) {
+    console.error(`Failed to read records for app ${appID}:`, err);
+    res.status(500).json({ message: 'Failed to read records' });
+  }
+});

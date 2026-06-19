@@ -16,6 +16,7 @@ export class StorageLimitError extends Error {
 export interface Repository {
   append(collection: string, record: Record<string, unknown>, maxRecords?: number): Promise<void>;
   list(collection: string): Promise<unknown[]>;
+  listByAppID(collection: string, appID: string): Promise<unknown[]>;
   close(): Promise<void>;
 }
 
@@ -40,6 +41,11 @@ export class JsonRepository implements Repository {
 
   async list(collection: string): Promise<unknown[]> {
     return readFile(collection);
+  }
+
+  async listByAppID(collection: string, appID: string): Promise<unknown[]> {
+    const records = await readFile(collection);
+    return records.filter((r) => (r as { appID?: unknown }).appID === appID);
   }
 
   async append(collection: string, record: Record<string, unknown>, maxRecords = Infinity): Promise<void> {

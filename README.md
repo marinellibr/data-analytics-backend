@@ -16,6 +16,22 @@ Todas as rotas de ingestão aceitam `POST` (gravar) e `GET` (listar):
 - `/events` com `type: 'click'` → requer `element` (opcional)
 - `/events` com `type: 'pageview'` → requer `timeOnPage` (em ms)
 
+### Rota agregada por app
+
+| Rota | Descrição |
+|------|-----------|
+| `GET /apps/:appID` | Retorna `events`, `httpCalls` e `sessions` daquele `appID` em uma única resposta |
+
+Resposta:
+```json
+{
+  "appID": "creamy-react",
+  "events": [ ... ],
+  "httpCalls": [ ... ],
+  "sessions": [ ... ]
+}
+```
+
 `GET /hello-world` é um health check simples.
 
 **Respostas:**
@@ -113,6 +129,14 @@ curl http://localhost:3000/events
 ```
 
 Retorna array de todos os eventos gravados.
+
+### GET - Todos os registros de um app
+
+```bash
+curl http://localhost:3000/apps/creamy-react
+```
+
+Retorna `events`, `httpCalls` e `sessions` filtrados por aquele `appID` em uma única resposta.
 
 ## 🔒 Segurança
 

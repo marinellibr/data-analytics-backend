@@ -25,6 +25,15 @@ export class MongoRepository implements Repository {
       .toArray();
   }
 
+  async listByAppID(collection: string, appID: string): Promise<unknown[]> {
+    // appID arrives as a plain string from the route param, so the filter
+    // value can't smuggle in query operators.
+    return this.db
+      .collection(collection)
+      .find({ appID }, { projection: { _id: 0 } })
+      .toArray();
+  }
+
   async append(collection: string, record: Record<string, unknown>, maxRecords = Infinity): Promise<void> {
     if (maxRecords !== Infinity) {
       const count = await this.db.collection(collection).estimatedDocumentCount();
