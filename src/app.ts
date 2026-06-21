@@ -20,6 +20,18 @@ app.use(
   })
 );
 
+// Reads return whole (app-scoped) collections, so they're the expensive
+// amplifier worth throttling harder than the coarse global backstop above.
+// Normal usage is only a handful of dashboard loads per day, so a low ceiling
+// costs legitimate users nothing while blunting scrape/DoS attempts.
+const readLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: Number(process.env.READ_RATE_LIMIT_PER_MINUTE) || 20,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { message: 'Too many requests, please try again later' },
+});
+
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -200,19 +212,18 @@ for (const { path, collection, fields } of ENTRY_ROUTES) {
     }
   });
 
-  app.get(path, async (req, res) => {
-    try {
-      const repository = await getRepository();
-      res.json(await repository.list(collection));
-    } catch (err) {
-      console.error(`Failed to read records from ${collection}:`, err);
-      res.status(500).json({ message: 'Failed to read records' });
-    }
-  });
+  // Note: there is no raw per-collection GET. Reads go exclusively through the
+  // app-scoped endpoints below, which the dashboard actually uses; exposing a
+  // full-collection dump would only be a free amplification target.
 }
 
 // Collections that are scoped per application.
 const APP_COLLECTIONS = ['events', 'http-calls', 'sessions'];
+
+// Throttle the read endpoints harder than the global backstop. Path-scoped
+// so it covers both /apps and /apps/:appID without breaking Express's route
+// param typing on the individual handlers.
+app.use('/apps', readLimiter);
 
 // Lists every distinct appID seen across the app-scoped collections, so a
 // client can populate an app picker without downloading all the data.
