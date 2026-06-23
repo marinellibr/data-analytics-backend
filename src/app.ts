@@ -107,6 +107,7 @@ const ENTRY_ROUTES: EntryRoute[] = [
           browser: { type: 'string' },
           referrer: { type: 'string' },
           utmSource: { type: 'string' }, // optional, marketing attribution
+          utmMedium: { type: 'string' }, // optional, marketing attribution
         },
       },
       startTime: { type: 'string', pattern: ISO_DATE_PATTERN },
@@ -127,7 +128,7 @@ const validateAndPick = (
   const errors: string[] = [];
   const record: Record<string, unknown> = {};
 
-  const optionalFields = ['element', 'timeOnPage', 'userID', 'endTime', 'utmSource'];
+  const optionalFields = ['element', 'timeOnPage', 'userID', 'endTime', 'utmSource', 'utmMedium'];
 
   for (const [name, spec] of Object.entries(fields)) {
     const value = body[name];
