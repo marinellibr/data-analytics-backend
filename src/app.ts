@@ -188,6 +188,27 @@ const validateAndPick = (
   return { errors, record };
 };
 
+// Visitor geolocation comes from Vercel's edge headers (derived from the
+// client IP), never trusted from the request body. Absent in local dev, where
+// the fields are simply omitted.
+const geoFromHeaders = (req: express.Request): { country?: string; city?: string } => {
+  const geo: { country?: string; city?: string } = {};
+  const country = req.headers['x-vercel-ip-country'];
+  const city = req.headers['x-vercel-ip-city'];
+  if (typeof country === 'string' && country) {
+    geo.country = country.slice(0, MAX_STRING_LENGTH);
+  }
+  if (typeof city === 'string' && city) {
+    // Vercel URL-encodes the city name.
+    try {
+      geo.city = decodeURIComponent(city).slice(0, MAX_STRING_LENGTH);
+    } catch {
+      geo.city = city.slice(0, MAX_STRING_LENGTH);
+    }
+  }
+  return geo;
+};
+
 for (const { path, collection, fields } of ENTRY_ROUTES) {
   app.post(path, async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -196,6 +217,12 @@ for (const { path, collection, fields } of ENTRY_ROUTES) {
     if (errors.length > 0) {
       res.status(400).json({ message: `Validation failed: ${errors.join('; ')}`, errors });
       return;
+    }
+
+    // Enrich sessions with server-derived geolocation (overrides anything the
+    // client might have sent, which validateAndPick has already discarded).
+    if (collection === 'sessions' && record.context && typeof record.context === 'object') {
+      Object.assign(record.context as Record<string, unknown>, geoFromHeaders(req));
     }
 
     try {
